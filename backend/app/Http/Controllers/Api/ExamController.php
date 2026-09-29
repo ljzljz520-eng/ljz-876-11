@@ -158,10 +158,29 @@ class ExamController extends Controller
 
     public function myRecords(Request $request)
     {
-        $records = ExamRecord::with('examPaper')
+        $records = ExamRecord::with(['examPaper', 'proctoringEvents', 'appeals'])
             ->where('user_id', $request->user()->id)
             ->orderBy('id', 'desc')
             ->paginate($perPage = $request->input('per_page', 15));
+
+        $records->getCollection()->transform(function ($record) {
+            $activeAnomalies = $record->proctoringEvents
+                ->where('is_waived', false)
+                ->whereIn('type', \App\Models\ProctoringEvent::ANOMALY_TYPES)
+                ->count();
+
+            $data = $record->toArray();
+            $data['active_anomaly_count'] = $activeAnomalies;
+            $data['waived_anomaly_count'] = $record->proctoringEvents->where('is_waived', true)->count();
+            $data['event_total'] = $record->proctoringEvents->count();
+            $data['appeal_status'] = $record->appeals->isNotEmpty()
+                ? $record->appeals->sortByDesc('id')->first()->status
+                : null;
+            $data['pending_appeals'] = $record->appeals
+                ->where('status', \App\Models\ExamAppeal::STATUS_PENDING)
+                ->count();
+            return $data;
+        });
 
         return response()->json([
             'records' => $records,

@@ -45,9 +45,10 @@ services:
           done
 
           table_exists=$$(mysql -h db -uroot -proot -Nse "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='exam_system' AND table_name='users';")
+          seeded=0
           if [ "$$table_exists" = "1" ]; then
-            echo "Database already initialized, skip seed."
-            exit 0
+            seeded=1
+            echo "Database already initialized, only ensure new tables exist."
           fi
 
           mysql -h db -uroot -proot exam_system <<'SQL'
@@ -226,7 +227,117 @@ services:
               `owner` VARCHAR(255) NOT NULL,
               `expiration` INT NOT NULL
           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Laravel缓存锁表';
-          SQL
+
+          CREATE TABLE IF NOT EXISTS proctoring_events (
+              id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+              exam_record_id BIGINT UNSIGNED NOT NULL COMMENT '考试记录ID',
+              user_id BIGINT UNSIGNED NOT NULL COMMENT '考生ID',
+              exam_paper_id BIGINT UNSIGNED NOT NULL COMMENT '试卷ID',
+              type VARCHAR(32) NOT NULL COMMENT '事件类型',
+              detail VARCHAR(500) DEFAULT NULL COMMENT '事件描述',
+              occurred_at DATETIME NOT NULL COMMENT '事件发生时间(客户端)',
+              is_waived TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已通过申诉撤销: 1-是 0-否',
+              waived_appeal_id BIGINT UNSIGNED DEFAULT NULL COMMENT '撤销该标记的申诉ID',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_record (exam_record_id),
+              INDEX idx_user (user_id),
+              INDEX idx_paper (exam_paper_id),
+              INDEX idx_type (type),
+              INDEX idx_occurred (occurred_at),
+              INDEX idx_waived (is_waived)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='监考事件表';
+
+          CREATE TABLE IF NOT EXISTS exam_appeals (
+              id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+              exam_record_id BIGINT UNSIGNED NOT NULL COMMENT '考试记录ID',
+              user_id BIGINT UNSIGNED NOT NULL COMMENT '申诉学生ID',
+              exam_paper_id BIGINT UNSIGNED NOT NULL COMMENT '试卷ID',
+              proctoring_event_id BIGINT UNSIGNED DEFAULT NULL COMMENT '关联的异常事件ID',
+              reason VARCHAR(1000) NOT NULL COMMENT '申诉说明',
+              status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending' COMMENT '复核状态',
+              review_comment VARCHAR(1000) DEFAULT NULL COMMENT '复核意见',
+              reviewer_id BIGINT UNSIGNED DEFAULT NULL COMMENT '复核教师ID',
+              reviewed_at DATETIME DEFAULT NULL COMMENT '复核时间',
+              score_adjustment DECIMAL(6,2) NOT NULL DEFAULT 0.00 COMMENT '改判分数调整值(正为加分负为减分)',
+              score_before DECIMAL(6,2) DEFAULT NULL COMMENT '改判前分数',
+              score_after DECIMAL(6,2) DEFAULT NULL COMMENT '改判后分数',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_record (exam_record_id),
+              INDEX idx_user (user_id),
+              INDEX idx_event (proctoring_event_id),
+              INDEX idx_status (status),
+              INDEX idx_reviewer (reviewer_id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='考试异常申诉表';
+
+          CREATE TABLE IF NOT EXISTS exam_appeal_evidence (
+              id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+              appeal_id BIGINT UNSIGNED NOT NULL COMMENT '申诉ID',
+              file_path VARCHAR(255) NOT NULL COMMENT '存储路径',
+              original_name VARCHAR(255) DEFAULT NULL COMMENT '原始文件名',
+              mime_type VARCHAR(100) DEFAULT NULL COMMENT '文件类型',
+              file_size INT UNSIGNED DEFAULT 0 COMMENT '文件大小(字节)',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              INDEX idx_appeal (appeal_id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='申诉截图证据表';
+SQL
+
+          if [ "$$seeded" = "0" ]; then
+          mysql -h db -uroot -proot exam_system <<'SQL'
+          SET NAMES utf8mb4;
+
+          INSERT INTO exam_records (id, user_id, exam_paper_id, start_time, end_time, score, status, created_at, updated_at)
+          SELECT 1, 3, 1,
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 25 MINUTE,
+                 DATE_SUB(NOW(), INTERVAL 2 DAY),
+                 3.00, 'graded',
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 25 MINUTE,
+                 DATE_SUB(NOW(), INTERVAL 2 DAY)
+          WHERE NOT EXISTS (SELECT 1 FROM exam_records WHERE id = 1);
+
+          INSERT INTO exam_record_answers (exam_record_id, question_id, answer, is_correct, score)
+          SELECT 1, 1, 'A', 0, 0.00
+          WHERE NOT EXISTS (SELECT 1 FROM exam_record_answers WHERE exam_record_id = 1 AND question_id = 1);
+          INSERT INTO exam_record_answers (exam_record_id, question_id, answer, is_correct, score)
+          SELECT 1, 2, 'true', 1, 1.00
+          WHERE NOT EXISTS (SELECT 1 FROM exam_record_answers WHERE exam_record_id = 1 AND question_id = 2);
+          INSERT INTO exam_record_answers (exam_record_id, question_id, answer, is_correct, score)
+          SELECT 1, 3, 'C', 1, 2.00
+          WHERE NOT EXISTS (SELECT 1 FROM exam_record_answers WHERE exam_record_id = 1 AND question_id = 3);
+
+          INSERT INTO proctoring_events (id, exam_record_id, user_id, exam_paper_id, type, detail, occurred_at, is_waived, created_at)
+          SELECT 1, 1, 3, 1, 'tab_switch', '考试窗口失去焦点/切换屏幕，持续约8秒',
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 22 MINUTE, 0, DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 22 MINUTE
+          WHERE NOT EXISTS (SELECT 1 FROM proctoring_events WHERE id = 1);
+          INSERT INTO proctoring_events (id, exam_record_id, user_id, exam_paper_id, type, detail, occurred_at, is_waived, created_at)
+          SELECT 2, 1, 3, 1, 'camera_disconnected', '摄像头被系统或浏览器中断，约30秒后恢复',
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 15 MINUTE, 0, DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 15 MINUTE
+          WHERE NOT EXISTS (SELECT 1 FROM proctoring_events WHERE id = 2);
+          INSERT INTO proctoring_events (id, exam_record_id, user_id, exam_paper_id, type, detail, occurred_at, is_waived, created_at)
+          SELECT 3, 1, 3, 1, 'network_lost', '网络连接中断',
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 12 MINUTE, 0, DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 12 MINUTE
+          WHERE NOT EXISTS (SELECT 1 FROM proctoring_events WHERE id = 3);
+          INSERT INTO proctoring_events (id, exam_record_id, user_id, exam_paper_id, type, detail, occurred_at, is_waived, created_at)
+          SELECT 4, 1, 3, 1, 'network_restored', '网络连接恢复，中断约40秒',
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 11 MINUTE, 0, DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 11 MINUTE
+          WHERE NOT EXISTS (SELECT 1 FROM proctoring_events WHERE id = 4);
+          INSERT INTO proctoring_events (id, exam_record_id, user_id, exam_paper_id, type, detail, occurred_at, is_waived, created_at)
+          SELECT 5, 1, 3, 1, 'idle_long', '连续60秒无任何操作',
+                 DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 5 MINUTE, 0, DATE_SUB(NOW(), INTERVAL 2 DAY) - INTERVAL 5 MINUTE
+          WHERE NOT EXISTS (SELECT 1 FROM proctoring_events WHERE id = 5);
+
+          INSERT INTO exam_appeals (id, exam_record_id, user_id, exam_paper_id, proctoring_event_id, reason, status, created_at)
+          SELECT 1, 1, 3, 1, 2,
+                 '考试中途杀毒软件弹出升级提示并占用了摄像头，关闭提示后摄像头立即恢复，并非本人故意遮挡或断开，附系统提示截图。',
+                 'pending', DATE_SUB(NOW(), INTERVAL 1 DAY)
+          WHERE NOT EXISTS (SELECT 1 FROM exam_appeals WHERE id = 1);
+
+          INSERT INTO exam_appeal_evidence (id, appeal_id, file_path, original_name, mime_type, file_size, created_at)
+          SELECT 1, 1, 'appeals/sample/camera-blocked.png', 'camera-blocked.png', 'image/png', 0, DATE_SUB(NOW(), INTERVAL 1 DAY)
+          WHERE NOT EXISTS (SELECT 1 FROM exam_appeal_evidence WHERE id = 1);
+SQL
+          fi
 
           echo "Database initialized from inline schema."
     networks:

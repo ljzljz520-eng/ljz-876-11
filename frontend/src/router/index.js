@@ -39,6 +39,24 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/records/:id/monitor',
+    name: 'Monitor',
+    component: () => import('../views/proctoring/Monitor.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/my-appeals',
+    name: 'MyAppeals',
+    component: () => import('../views/appeals/MyAppeals.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/proctoring/review',
+    name: 'ProctoringReview',
+    component: () => import('../views/proctoring/Review.vue'),
+    meta: { requiresAuth: true, roles: ['admin', 'teacher'] }
+  },
+  {
     path: '/questions',
     name: 'Questions',
     component: () => import('../views/questions/Index.vue'),

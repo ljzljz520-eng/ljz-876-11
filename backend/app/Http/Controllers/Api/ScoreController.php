@@ -38,6 +38,26 @@ class ScoreController extends Controller
             ->limit(10)
             ->get();
 
+        // 监考与申诉联动统计（异常标记被撤销后不计入；改判后的分数实时参与统计）
+        $totalAnomalyEvents = DB::table('proctoring_events')
+            ->where('is_waived', 0)
+            ->whereIn('type', \App\Models\ProctoringEvent::ANOMALY_TYPES)
+            ->count();
+
+        $recordsWithAnomaly = DB::table('exam_records')
+            ->where('status', 'graded')
+            ->whereExists(function ($query) {
+                $query->select(DB::raw(1))
+                    ->from('proctoring_events')
+                    ->whereColumn('proctoring_events.exam_record_id', 'exam_records.id')
+                    ->where('proctoring_events.is_waived', 0)
+                    ->whereIn('proctoring_events.type', \App\Models\ProctoringEvent::ANOMALY_TYPES);
+            })
+            ->count();
+
+        $pendingAppeals = DB::table('exam_appeals')->where('status', 'pending')->count();
+        $approvedAppeals = DB::table('exam_appeals')->where('status', 'approved')->count();
+
         return response()->json([
             'statistics' => [
                 'total_users' => $totalUsers,
@@ -45,6 +65,10 @@ class ScoreController extends Controller
                 'total_records' => $totalRecords,
                 'avg_score' => round($avgScore, 2),
                 'pass_rate' => round($passRate, 2),
+                'total_anomaly_events' => $totalAnomalyEvents,
+                'records_with_anomaly' => $recordsWithAnomaly,
+                'pending_appeals' => $pendingAppeals,
+                'approved_appeals' => $approvedAppeals,
             ],
             'recent_records' => $recentRecords,
         ]);
@@ -155,6 +179,34 @@ class ScoreController extends Controller
                 'low_score' => $lowScore,
                 'score_distribution' => $scoreDistribution,
                 'question_stats' => $questionStats,
+                'anomaly_stats' => [
+                    'records_with_active_anomaly' => DB::table('exam_records')
+                        ->where('exam_paper_id', $examPaper->id)
+                        ->where('status', 'graded')
+                        ->whereExists(function ($query) {
+                            $query->select(DB::raw(1))
+                                ->from('proctoring_events')
+                                ->whereColumn('proctoring_events.exam_record_id', 'exam_records.id')
+                                ->where('proctoring_events.is_waived', 0)
+                                ->whereIn('proctoring_events.type', \App\Models\ProctoringEvent::ANOMALY_TYPES);
+                        })
+                        ->count(),
+                    'events_by_type' => DB::table('proctoring_events')
+                        ->where('exam_paper_id', $examPaper->id)
+                        ->where('is_waived', 0)
+                        ->whereIn('type', \App\Models\ProctoringEvent::ANOMALY_TYPES)
+                        ->select('type', DB::raw('COUNT(*) as total'))
+                        ->groupBy('type')
+                        ->pluck('total', 'type'),
+                    'appeals_pending' => DB::table('exam_appeals')
+                        ->where('exam_paper_id', $examPaper->id)
+                        ->where('status', 'pending')
+                        ->count(),
+                    'appeals_approved' => DB::table('exam_appeals')
+                        ->where('exam_paper_id', $examPaper->id)
+                        ->where('status', 'approved')
+                        ->count(),
+                ],
             ],
         ]);
     }

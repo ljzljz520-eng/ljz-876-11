@@ -88,6 +88,25 @@ node scripts/verify-readme-test-credentials.mjs --manifest qa/.runtime/test-cred
 3. 试卷管理：试卷创建、编辑、题目关联。
 4. 在线考试：开始考试、提交答卷、自动评分。
 5. 成绩统计：个人成绩与管理端统计数据。
+6. 监考回放：考试中自动采集切屏/窗口失焦、摄像头断开与恢复、长时间无操作、网络中断与恢复、退出全屏等事件，按发生时间形成时间线。
+7. 异常申诉：学生可对某条异常（或整场考试）填写说明并上传 1-3 张截图。
+8. 教师复核：教师在"监考复核台"查看回放与证据，可驳回，或判定申诉成立时撤销异常标记并输入分数调整（可加可减）；分数、异常标记与成绩统计实时联动更新。
+
+### 监考与申诉接口
+| 方法 | 路径 | 角色 | 说明 |
+|---|---|---|---|
+| POST | `/api/proctoring/events` | 学生 | 考试中批量上报监考事件（定时上报 + 交卷/关闭页面补发） |
+| GET | `/api/proctoring/records/{record}/timeline` | 本人 | 监考回放时间线 |
+| GET | `/api/proctoring/records` | 教师/管理员 | 监考记录列表（支持按试卷/异常/待申诉筛选） |
+| GET | `/api/proctoring/records/{record}/review` | 教师/管理员 | 任意考试的回放时间线 |
+| POST | `/api/appeals` | 学生 | 提交申诉（multipart，说明 + 截图） |
+| GET | `/api/appeals/mine` | 学生 | 我的申诉 |
+| GET | `/api/appeals` | 教师/管理员 | 申诉处理列表 |
+| POST | `/api/appeals/{appeal}/review` | 教师/管理员 | 复核：`approved`（改判+撤销标记）/ `rejected` |
+| GET | `/api/proctoring/evidence/{id}?token=` | 本人/教师 | 鉴权读取申诉截图 |
+
+> 复核改判在数据库事务内完成：更新 `exam_records.score`、把对应 `proctoring_events.is_waived` 置 1、写入复核结论；统计接口基于这两张表实时聚合，无需额外刷新。
+
 
 ## 角色权限
 | 角色 | 可访问模块 |
@@ -119,7 +138,7 @@ docker compose exec backend sh -lc "curl -s -X POST http://localhost:8080/api/au
 - CORS 与基础限流已配置。
 
 ## 数据库说明
-当前初始化后包含 10 张核心表（含用户、题目、试卷、考试记录、答案记录等）。
+当前初始化后包含 13 张核心表（含用户、题目、试卷、考试记录、答案记录、监考事件、申诉、申诉证据等）。
 
 详见：
 - `docs/Database.sql`
