@@ -61,6 +61,37 @@
         </div>
       </div>
     </div>
+
+    <!-- 监考与申诉概览（改判联动） -->
+    <div class="card-base p-6">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="text-lg font-bold text-gray-900 flex items-center">
+          <span class="w-1.5 h-6 bg-red-500 rounded-full mr-3 shadow-sm"></span>
+          监考与申诉概览
+        </h3>
+        <router-link to="/proctoring/review" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+          前往监考复核 →
+        </router-link>
+      </div>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="rounded-xl bg-red-50 p-4">
+          <div class="text-xs text-red-600 font-semibold mb-1">存在违规的考试</div>
+          <div class="text-2xl font-bold text-red-700">{{ proctoring.anomaly_records }}</div>
+        </div>
+        <div class="rounded-xl bg-orange-50 p-4">
+          <div class="text-xs text-orange-600 font-semibold mb-1">已确认违规事件</div>
+          <div class="text-2xl font-bold text-orange-700">{{ proctoring.confirmed_events }}</div>
+        </div>
+        <div class="rounded-xl bg-amber-50 p-4">
+          <div class="text-xs text-amber-600 font-semibold mb-1">待处理申诉</div>
+          <div class="text-2xl font-bold text-amber-700">{{ proctoring.pending_appeals }}</div>
+        </div>
+        <div class="rounded-xl bg-indigo-50 p-4">
+          <div class="text-xs text-indigo-600 font-semibold mb-1">累计监考扣分</div>
+          <div class="text-2xl font-bold text-indigo-700">{{ proctoring.total_deduction }}</div>
+        </div>
+      </div>
+    </div>
     
     <div class="card-base p-6">
       <h3 class="text-lg font-bold text-gray-900 mb-6 flex items-center">
@@ -74,6 +105,7 @@
               <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider rounded-tl-lg">用户</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">试卷</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">得分</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">异常</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider rounded-tr-lg">时间</th>
             </tr>
           </thead>
@@ -94,12 +126,18 @@
                   :class="getScoreClass(record.score)"
                 >
                   {{ record.score }}
+                  <span v-if="Number(record.deduction) > 0" class="block text-[10px] font-normal">扣{{ record.deduction }}</span>
                 </span>
+              </td>
+              <td class="px-4 py-3">
+                <span v-if="Number(record.anomaly_count) > 0" class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-semibold">{{ record.anomaly_count }} 违规</span>
+                <span v-if="record.review_status === 'reviewed'" class="ml-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold">改判</span>
+                <span v-if="Number(record.anomaly_count) === 0 && record.review_status !== 'reviewed'" class="text-xs text-gray-400">-</span>
               </td>
               <td class="px-4 py-3 text-gray-500 text-sm">{{ formatDate(record.updated_at) }}</td>
             </tr>
             <tr v-if="recentRecords.length === 0">
-              <td colspan="4" class="px-4 py-8 text-center text-gray-500">
+              <td colspan="5" class="px-4 py-8 text-center text-gray-500">
                 暂无考试记录
               </td>
             </tr>
@@ -121,6 +159,7 @@ const statistics = ref({
   avg_score: 0
 })
 const recentRecords = ref([])
+const proctoring = ref({ anomaly_records: 0, confirmed_events: 0, pending_appeals: 0, total_deduction: 0 })
 
 const getScoreClass = (score) => {
   if (score >= 80) return 'bg-green-100 text-green-800'
@@ -144,6 +183,7 @@ onMounted(async () => {
     const response = await api.get('/scores/statistics')
     statistics.value = response.data.statistics
     recentRecords.value = response.data.recent_records
+    if (response.data.proctoring) proctoring.value = response.data.proctoring
   } catch (e) {
     console.error('Failed to fetch statistics:', e)
   }

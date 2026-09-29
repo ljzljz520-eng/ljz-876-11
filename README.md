@@ -88,13 +88,38 @@ node scripts/verify-readme-test-credentials.mjs --manifest qa/.runtime/test-cred
 3. 试卷管理：试卷创建、编辑、题目关联。
 4. 在线考试：开始考试、提交答卷、自动评分。
 5. 成绩统计：个人成绩与管理端统计数据。
+6. 监考回放与申诉（监考联动改判）：
+   - 考试中自动采集 **切屏/窗口失焦、退出全屏、摄像头断开与恢复、长时间无操作、网络中断与恢复** 等事件，按发生时间形成时间线；网络中断期间事件本地缓冲，恢复后自动补发。
+   - 学生在「我的成绩 → 监考回放」查看事件时间线，可对单条异常提交 **说明文字 + 佐证截图** 的申诉，每件异常限申诉一次；「我的申诉」页跟踪处理进度。
+   - 教师在「监考复核」中确认/撤销异常、批准/驳回申诉、手动调整成绩；所有改判在数据库事务内执行，**最终分数、异常标记、排名与成绩统计自动同步重算**（最终分 = 原始作答分 − 已确认违规扣分，最低 0 分）。
+
+### 监考/申诉相关接口
+| 方法 | 路径 | 角色 | 说明 |
+|---|---|---|---|
+| POST | `/api/proctoring/events` | 学生 | 考试中批量上报监考事件（支持离线补发） |
+| GET | `/api/proctoring/records/{record}/timeline` | 学生 | 监考事件时间线（含申诉与复核状态） |
+| POST | `/api/proctoring/appeals` | 学生 | 对某条异常提交申诉（说明+截图） |
+| GET | `/api/proctoring/appeals/mine` | 学生 | 我的申诉列表 |
+| GET | `/api/proctoring/records` | 教师/管理员 | 有异常的考试记录（可按申诉状态筛选） |
+| GET | `/api/proctoring/admin/records/{record}/timeline` | 教师/管理员 | 复核详情（时间线+申诉+答卷构成） |
+| POST | `/api/proctoring/events/{event}/review` | 教师/管理员 | 确认违规 / 撤销异常（联动重算分数） |
+| POST | `/api/proctoring/appeals/{appeal}/review` | 教师/管理员 | 申诉成立 / 驳回（联动重算分数） |
+| POST | `/api/proctoring/records/{record}/adjust-score` | 教师/管理员 | 手动调整成绩（保留改判说明） |
+| GET | `/api/proctoring/pending-counts` | 教师/管理员 | 待处理申诉角标计数 |
+
+### 监考数据表
+- `proctoring_events`：监考事件（类型、严重级别、发生时间、持续时长、详情、截图、扣分、复核状态）
+- `exam_appeals`：申诉（关联事件、说明、截图、复核意见）
+- `exam_records` 新增：`base_score`（原始分）、`deduction`（累计扣分）、`anomaly_count`（已确认异常数）、`review_status/reviewed_by/reviewed_at/review_note`（改判痕迹）
+
+> 新表通过 `database/migrations/` 迁移管理，后端容器启动时自动执行 `php artisan migrate --force`；全新初始化的数据库由 docker-compose 内联建表并附带一条含监考时间线与待处理申诉的演示数据。
 
 ## 角色权限
 | 角色 | 可访问模块 |
 |---|---|
-| Student | 在线考试、我的成绩 |
-| Teacher | 在线考试、我的成绩、题库管理、试卷管理 |
-| Admin | 全部功能（含数据统计） |
+| Student | 在线考试、我的成绩、我的申诉、监考回放 |
+| Teacher | 在线考试、我的成绩、题库管理、试卷管理、监考复核 |
+| Admin | 全部功能（含数据统计、监考复核） |
 
 ## 人工验证步骤（建议）
 1. 打开登录页：`http://localhost:8080/login`。
@@ -119,7 +144,7 @@ docker compose exec backend sh -lc "curl -s -X POST http://localhost:8080/api/au
 - CORS 与基础限流已配置。
 
 ## 数据库说明
-当前初始化后包含 10 张核心表（含用户、题目、试卷、考试记录、答案记录等）。
+当前初始化后包含 12 张核心表（含用户、题目、试卷、考试记录、答案记录、监考事件、申诉等）。
 
 详见：
 - `docs/Database.sql`

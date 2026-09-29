@@ -192,7 +192,14 @@ services:
               exam_paper_id BIGINT UNSIGNED NOT NULL COMMENT '试卷ID',
               start_time TIMESTAMP NOT NULL COMMENT '开始时间',
               end_time TIMESTAMP NULL COMMENT '提交时间',
-              score DECIMAL(5,2) DEFAULT 0.00 COMMENT '得分',
+              score DECIMAL(5,2) DEFAULT 0.00 COMMENT '最终得分(改判联动)',
+              base_score DECIMAL(5,2) DEFAULT 0.00 COMMENT '自动评分原始得分',
+              deduction DECIMAL(5,2) DEFAULT 0.00 COMMENT '监考违规累计扣分',
+              anomaly_count INT UNSIGNED DEFAULT 0 COMMENT '已确认违规异常数(改判联动)',
+              review_status ENUM('none','reviewed') DEFAULT 'none' COMMENT '成绩是否经教师复核改判',
+              reviewed_by BIGINT UNSIGNED DEFAULT NULL COMMENT '改判教师ID',
+              reviewed_at TIMESTAMP NULL COMMENT '最近改判时间',
+              review_note VARCHAR(500) DEFAULT NULL COMMENT '改判说明',
               status ENUM('in_progress', 'submitted', 'graded') DEFAULT 'in_progress' COMMENT '状态',
               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -214,6 +221,49 @@ services:
               INDEX idx_question_id (question_id)
           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='考生答案表';
 
+          CREATE TABLE IF NOT EXISTS proctoring_events (
+              id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+              exam_record_id BIGINT UNSIGNED NOT NULL COMMENT '考试记录ID',
+              user_id BIGINT UNSIGNED NOT NULL COMMENT '考生ID',
+              event_type VARCHAR(30) NOT NULL COMMENT '事件类型: tab_switch/fullscreen_exit/camera_off/camera_on/idle/network_offline/network_online/manual_flag',
+              severity ENUM('info','warning','critical') NOT NULL DEFAULT 'warning' COMMENT '严重级别',
+              occurred_at DATETIME NOT NULL COMMENT '事件发生时间(客户端)',
+              duration INT UNSIGNED DEFAULT 0 COMMENT '持续时长(秒)',
+              detail VARCHAR(500) DEFAULT NULL COMMENT '事件详情',
+              evidence_screenshot MEDIUMTEXT DEFAULT NULL COMMENT '截图(data URL)',
+              penalty DECIMAL(5,2) DEFAULT 0.00 COMMENT '扣分',
+              status ENUM('pending','confirmed','dismissed') NOT NULL DEFAULT 'pending' COMMENT '复核状态: pending-待核 confirmed-违规成立 dismissed-误报/已撤销',
+              reviewed_by BIGINT UNSIGNED DEFAULT NULL COMMENT '复核人ID',
+              reviewed_at DATETIME DEFAULT NULL COMMENT '复核时间',
+              review_note VARCHAR(500) DEFAULT NULL COMMENT '复核备注',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_pe_record (exam_record_id),
+              INDEX idx_pe_user (user_id),
+              INDEX idx_pe_type (event_type),
+              INDEX idx_pe_status (status),
+              INDEX idx_pe_occurred (occurred_at)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='监考事件表';
+
+          CREATE TABLE IF NOT EXISTS exam_appeals (
+              id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+              exam_record_id BIGINT UNSIGNED NOT NULL COMMENT '考试记录ID',
+              proctoring_event_id BIGINT UNSIGNED NOT NULL COMMENT '被申诉的监考事件ID',
+              user_id BIGINT UNSIGNED NOT NULL COMMENT '申诉学生ID',
+              reason TEXT NOT NULL COMMENT '申诉说明',
+              evidence_screenshot MEDIUMTEXT DEFAULT NULL COMMENT '申诉截图(data URL)',
+              status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending' COMMENT '状态: pending-待复核 approved-申诉成立(撤销异常) rejected-申诉驳回',
+              reviewer_id BIGINT UNSIGNED DEFAULT NULL COMMENT '复核教师ID',
+              review_note TEXT DEFAULT NULL COMMENT '复核意见',
+              reviewed_at DATETIME DEFAULT NULL COMMENT '复核时间',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              UNIQUE KEY uk_appeal_event (proctoring_event_id),
+              INDEX idx_appeal_record (exam_record_id),
+              INDEX idx_appeal_user (user_id),
+              INDEX idx_appeal_status (status)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='监考申诉表';
+
           CREATE TABLE IF NOT EXISTS cache (
               `key` VARCHAR(255) NOT NULL PRIMARY KEY,
               `value` MEDIUMTEXT NOT NULL,
@@ -226,6 +276,27 @@ services:
               `owner` VARCHAR(255) NOT NULL,
               `expiration` INT NOT NULL
           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Laravel缓存锁表';
+
+          -- 演示：student1 已完成试卷1，含监考事件时间线与一条待复核申诉
+          INSERT INTO exam_records (id, user_id, exam_paper_id, start_time, end_time, score, base_score, deduction, anomaly_count, review_status, status, created_at, updated_at) VALUES
+          (1, 3, 1, DATE_SUB(NOW(), INTERVAL 2 HOUR), DATE_SUB(NOW(), INTERVAL 90 MINUTE), 0.00, 5.00, 5.00, 2, 'none', 'graded', DATE_SUB(NOW(), INTERVAL 2 HOUR), DATE_SUB(NOW(), INTERVAL 90 MINUTE));
+
+          INSERT INTO exam_record_answers (exam_record_id, question_id, answer, is_correct, score) VALUES
+          (1, 1, 'C', 1, 2.00),
+          (1, 2, 'true', 1, 1.00),
+          (1, 3, 'A', 0, 0.00);
+
+          INSERT INTO proctoring_events (id, exam_record_id, user_id, event_type, severity, occurred_at, duration, detail, penalty, status, created_at, updated_at) VALUES
+          (1, 1, 3, 'tab_switch',     'warning',  DATE_SUB(NOW(), INTERVAL 115 MINUTE), 8,  '浏览器切换到其他窗口（visibilitychange=hidden）', 2.00, 'confirmed', DATE_SUB(NOW(), INTERVAL 115 MINUTE), DATE_SUB(NOW(), INTERVAL 80 MINUTE)),
+          (2, 1, 3, 'camera_off',     'critical', DATE_SUB(NOW(), INTERVAL 108 MINUTE), 45, '摄像头意外断开，请检查设备权限', 3.00, 'confirmed', DATE_SUB(NOW(), INTERVAL 108 MINUTE), DATE_SUB(NOW(), INTERVAL 80 MINUTE)),
+          (3, 1, 3, 'camera_on',      'info',     DATE_SUB(NOW(), INTERVAL 107 MINUTE), 0,  '摄像头画面恢复', 0.00, 'pending',   DATE_SUB(NOW(), INTERVAL 107 MINUTE), DATE_SUB(NOW(), INTERVAL 107 MINUTE)),
+          (4, 1, 3, 'idle',           'warning',  DATE_SUB(NOW(), INTERVAL 102 MINUTE), 95, '连续 95 秒无鼠标/键盘操作', 2.00, 'pending',   DATE_SUB(NOW(), INTERVAL 102 MINUTE), DATE_SUB(NOW(), INTERVAL 102 MINUTE)),
+          (5, 1, 3, 'network_offline','warning',  DATE_SUB(NOW(), INTERVAL 99 MINUTE), 20, '网络连接中断（online/offline 事件）', 0.00, 'pending',   DATE_SUB(NOW(), INTERVAL 99 MINUTE), DATE_SUB(NOW(), INTERVAL 99 MINUTE)),
+          (6, 1, 3, 'network_online', 'info',     DATE_SUB(NOW(), INTERVAL 98 MINUTE), 0,  '网络恢复，已自动补发离线期间事件', 0.00, 'pending',   DATE_SUB(NOW(), INTERVAL 98 MINUTE), DATE_SUB(NOW(), INTERVAL 98 MINUTE));
+
+          INSERT INTO exam_appeals (id, exam_record_id, proctoring_event_id, user_id, reason, status, created_at, updated_at) VALUES
+          (1, 1, 1, 3, '当时浏览器弹出系统更新提示导致自动失焦，并非主动切屏查找资料，申请撤销该异常标记。', 'pending', DATE_SUB(NOW(), INTERVAL 75 MINUTE), DATE_SUB(NOW(), INTERVAL 75 MINUTE));
+
           SQL
 
           echo "Database initialized from inline schema."

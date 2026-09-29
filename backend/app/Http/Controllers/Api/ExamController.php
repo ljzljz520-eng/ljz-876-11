@@ -6,8 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\ExamPaper;
 use App\Models\ExamRecord;
 use App\Models\ExamRecordAnswer;
+use App\Models\ProctoringEvent;
 use App\Models\Question;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class ExamController extends Controller
@@ -108,6 +111,14 @@ class ExamController extends Controller
             'answers' => 'required|array',
             'answers.*.question_id' => 'required|exists:questions,id',
             'answers.*.answer' => 'required|string',
+            'events' => 'sometimes|array',
+            'events.*.event_type' => 'required|string|max:30',
+            'events.*.severity' => 'sometimes|string|in:info,warning,critical',
+            'events.*.occurred_at' => 'sometimes|date',
+            'events.*.duration' => 'sometimes|integer|min:0',
+            'events.*.detail' => 'sometimes|nullable|string|max:500',
+            'events.*.evidence_screenshot' => 'sometimes|nullable|string|max:2000000',
+            'events.*.penalty' => 'sometimes|numeric|min:0',
         ]);
 
         if ($validator->fails()) {
@@ -123,35 +134,48 @@ class ExamController extends Controller
         $totalScore = 0;
         $questionMap = $examPaper->questions->keyBy('id');
 
-        foreach ($request->answers as $answerData) {
-            $question = $questionMap->get($answerData['question_id']);
-            if (!$question) {
-                continue;
+        DB::transaction(function () use ($request, $examPaper, $record, $questionMap, &$totalScore) {
+            foreach ($request->answers as $answerData) {
+                $question = $questionMap->get($answerData['question_id']);
+                if (!$question) {
+                    continue;
+                }
+
+                $isCorrect = $this->checkAnswer($question, $answerData['answer']);
+                $score = $isCorrect ? $question->pivot->score : 0;
+
+                ExamRecordAnswer::create([
+                    'exam_record_id' => $record->id,
+                    'question_id' => $answerData['question_id'],
+                    'answer' => $answerData['answer'],
+                    'is_correct' => $isCorrect,
+                    'score' => $score,
+                ]);
+
+                $totalScore += $score;
             }
 
-            $isCorrect = $this->checkAnswer($question, $answerData['answer']);
-            $score = $isCorrect ? $question->pivot->score : 0;
+            // 先落库交卷时刻仍在客户端缓冲的监考事件（网络中断期间采集，恢复后随提交补发）
+            if ($request->has('events') && is_array($request->events)) {
+                app(\App\Services\ProctoringService::class)->storeEvents($record, $request->events);
+            }
 
-            ExamRecordAnswer::create([
-                'exam_record_id' => $record->id,
-                'question_id' => $answerData['question_id'],
-                'answer' => $answerData['answer'],
-                'is_correct' => $isCorrect,
-                'score' => $score,
+            $record->update([
+                'end_time' => now(),
+                'status' => 'graded',
             ]);
 
-            $totalScore += $score;
-        }
-
-        $record->update([
-            'end_time' => now(),
-            'score' => $totalScore,
-            'status' => 'graded',
-        ]);
+            // 自动确认违规事件、锁定原始分并计算扣分后最终得分
+            app(\App\Services\ProctoringService::class)->applyOnSubmit($record, (float) $totalScore);
+            $record->refresh();
+        });
 
         return response()->json([
             'message' => '提交成功',
-            'score' => $totalScore,
+            'score' => $record->score,
+            'base_score' => $record->base_score,
+            'deduction' => $record->deduction,
+            'anomaly_count' => $record->anomaly_count,
             'exam_record' => $record->load('answers'),
         ]);
     }

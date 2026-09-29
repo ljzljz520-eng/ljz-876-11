@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ExamController;
 use App\Http\Controllers\Api\ExamPaperController;
+use App\Http\Controllers\Api\ProctoringController;
 use App\Http\Controllers\Api\QuestionController;
 use App\Http\Controllers\Api\ScoreController;
 use Illuminate\Support\Facades\Route;
@@ -51,5 +52,24 @@ Route::middleware(['api', 'auth:sanctum', 'throttle:60,1'])->group(function () {
         Route::get('/statistics', [ScoreController::class, 'statistics']);
         Route::get('/ranking/{examPaper}', [ScoreController::class, 'ranking']);
         Route::get('/analysis/{examPaper}', [ScoreController::class, 'analysis']);
+    });
+
+    // 监考回放与申诉
+    Route::prefix('proctoring')->group(function () {
+        // 学生端
+        Route::post('/events', [ProctoringController::class, 'reportEvents']);
+        Route::get('/records/{record}/timeline', [ProctoringController::class, 'timeline']);
+        Route::post('/appeals', [ProctoringController::class, 'storeAppeal']);
+        Route::get('/appeals/mine', [ProctoringController::class, 'myAppeals']);
+
+        // 教师/管理员复核
+        Route::middleware('role:admin,teacher')->group(function () {
+            Route::get('/records', [ProctoringController::class, 'records']);
+            Route::get('/admin/records/{record}/timeline', [ProctoringController::class, 'adminTimeline']);
+            Route::post('/events/{event}/review', [ProctoringController::class, 'reviewEvent']);
+            Route::post('/appeals/{appeal}/review', [ProctoringController::class, 'reviewAppeal']);
+            Route::post('/records/{record}/adjust-score', [ProctoringController::class, 'adjustScore']);
+            Route::get('/pending-counts', [ProctoringController::class, 'pendingCounts']);
+        });
     });
 });

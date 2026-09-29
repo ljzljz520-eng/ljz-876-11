@@ -100,12 +100,19 @@
               >
                 在线考试
               </router-link>
-              <router-link 
-                to="/records" 
+              <router-link
+                to="/records"
                 class="nav-link"
                 :class="{ 'nav-link-active': $route.path === '/records' }"
               >
                 我的成绩
+              </router-link>
+              <router-link
+                to="/appeals"
+                class="nav-link"
+                :class="{ 'nav-link-active': $route.path === '/appeals' }"
+              >
+                我的申诉
               </router-link>
               <router-link 
                 v-if="authStore.isTeacher" 
@@ -115,13 +122,25 @@
               >
                 题库管理
               </router-link>
-              <router-link 
-                v-if="authStore.isTeacher" 
-                to="/exam-papers" 
+              <router-link
+                v-if="authStore.isTeacher"
+                to="/exam-papers"
                 class="nav-link"
                 :class="{ 'nav-link-active': $route.path === '/exam-papers' }"
               >
                 试卷管理
+              </router-link>
+              <router-link
+                v-if="authStore.isTeacher"
+                to="/proctoring/review"
+                class="nav-link relative"
+                :class="{ 'nav-link-active': $route.path.startsWith('/proctoring/review') }"
+              >
+                监考复核
+                <span v-if="pendingAppeals > 0"
+                  class="absolute -top-1 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">
+                  {{ pendingAppeals }}
+                </span>
               </router-link>
               <router-link 
                 v-if="authStore.isAdmin" 
@@ -155,8 +174,12 @@
         <div class="px-2 py-2 space-y-1">
           <router-link to="/exams" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path === '/exams' }">在线考试</router-link>
           <router-link to="/records" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path === '/records' }">我的成绩</router-link>
+          <router-link to="/appeals" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path === '/appeals' }">我的申诉</router-link>
           <router-link v-if="authStore.isTeacher" to="/questions" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path === '/questions' }">题库管理</router-link>
           <router-link v-if="authStore.isTeacher" to="/exam-papers" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path === '/exam-papers' }">试卷管理</router-link>
+          <router-link v-if="authStore.isTeacher" to="/proctoring/review" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path.startsWith('/proctoring/review') }">
+            监考复核<span v-if="pendingAppeals > 0" class="ml-1 text-red-600">({{ pendingAppeals }})</span>
+          </router-link>
           <router-link v-if="authStore.isAdmin" to="/statistics" class="mobile-nav-link" :class="{ 'mobile-nav-link-active': $route.path === '/statistics' }">数据统计</router-link>
         </div>
       </div>
@@ -168,13 +191,32 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useAuthStore } from './stores/auth'
 import ToastContainer from './components/ToastContainer.vue'
 import { useModal } from './composables/useModal'
+import api from './api'
 
 const authStore = useAuthStore()
 const { modalState, handleConfirm, handleCancel } = useModal()
+
+const pendingAppeals = ref(0)
+
+const fetchPendingCounts = async () => {
+  if (!authStore.isTeacher) return
+  try {
+    const res = await api.get('/proctoring/pending-counts')
+    pendingAppeals.value = res.data.pending_appeals || 0
+  } catch (e) {
+    // 忽略角标加载失败
+  }
+}
+
+onMounted(() => {
+  fetchPendingCounts()
+  // 每 60 秒刷新一次待处理申诉角标
+  setInterval(fetchPendingCounts, 60000)
+})
 
 const logout = async () => {
   await authStore.logout()

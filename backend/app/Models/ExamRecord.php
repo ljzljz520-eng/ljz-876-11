@@ -15,6 +15,13 @@ class ExamRecord extends Model
         'start_time',
         'end_time',
         'score',
+        'base_score',
+        'deduction',
+        'anomaly_count',
+        'review_status',
+        'reviewed_by',
+        'reviewed_at',
+        'review_note',
         'status',
     ];
 
@@ -24,12 +31,19 @@ class ExamRecord extends Model
         'start_time' => 'datetime',
         'end_time' => 'datetime',
         'score' => 'decimal:2',
+        'base_score' => 'decimal:2',
+        'deduction' => 'decimal:2',
+        'anomaly_count' => 'integer',
+        'reviewed_at' => 'datetime',
         'status' => 'string',
     ];
 
     public const STATUS_IN_PROGRESS = 'in_progress';
     public const STATUS_SUBMITTED = 'submitted';
     public const STATUS_GRADED = 'graded';
+
+    public const REVIEW_NONE = 'none';
+    public const REVIEW_REVIEWED = 'reviewed';
 
     public const STATUSES = [
         self::STATUS_IN_PROGRESS => '进行中',
@@ -50,5 +64,20 @@ class ExamRecord extends Model
     public function answers()
     {
         return $this->hasMany(ExamRecordAnswer::class, 'exam_record_id');
+    }
+
+    public function proctoringEvents()
+    {
+        return $this->hasMany(ProctoringEvent::class, 'exam_record_id');
+    }
+
+    public function appeals()
+    {
+        return $this->hasMany(ExamAppeal::class, 'exam_record_id');
+    }
+
+    public function reviewer()
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
     }
 }
